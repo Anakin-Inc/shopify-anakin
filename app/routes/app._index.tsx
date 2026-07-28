@@ -8,7 +8,8 @@ import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
-import { authenticate, MONTHLY_PLAN } from "../shopify.server";
+import { authenticate } from "../shopify.server";
+import { requireShopContext, requireApiKey } from "../anakin-shop.server";
 import db from "../db.server";
 import {
   AnakinApiError,
@@ -25,31 +26,15 @@ import {
 type Intent = "save_key" | "scrape" | "search" | "agentic_search";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session, billing } = await authenticate.admin(request);
-
   // Real Billing API wiring: require an active subscription to this app's
   // one plan before the merchant can use the page. `billing.require` calls
   // the real GraphQL Billing API (`appSubscriptionCreate` under the hood --
   // see SUBMIT.md) via `onFailure`, which redirects to Shopify's own
   // confirmation page. `isTest: true` so this never puts a real charge on a
   // card while the app is unlisted -- flip to conditional-on-env before an
-  // App Store submission.
-  const billingCheck = await billing.require({
-    plans: [MONTHLY_PLAN],
-    isTest: true,
-    onFailure: async () =>
-      billing.request({ plan: MONTHLY_PLAN, isTest: true }),
-  });
-
-  const settings = await db.shopSettings.findUnique({
-    where: { shop: session.shop },
-  });
-
-  return {
-    shop: session.shop,
-    hasApiKey: Boolean(settings?.apiKey),
-    subscription: billingCheck.appSubscriptions[0]?.name ?? null,
-  };
+  // App Store submission. Shared with every other /app/* page via
+  // requireShopContext -- see app/anakin-shop.server.ts.
+  return requireShopContext(request);
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -71,10 +56,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   // Every other intent needs a saved key.
-  const settings = await db.shopSettings.findUnique({
-    where: { shop: session.shop },
-  });
-  if (!settings?.apiKey) {
+  const apiKey = await requireApiKey(request);
+  if (!apiKey) {
     return { intent, error: "Save an Anakin API key first." };
   }
 
@@ -82,7 +65,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "scrape") {
       const url = String(formData.get("url") ?? "").trim();
       if (!url) return { intent, error: "Enter a URL to scrape." };
-      const result = await scrapeUrl(settings.apiKey, url);
+      const result = await scrapeUrl(apiKey, url);
       return { intent, result } satisfies {
         intent: Intent;
         result: ScrapeResult;
@@ -92,7 +75,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "search") {
       const prompt = String(formData.get("prompt") ?? "").trim();
       if (!prompt) return { intent, error: "Enter a search prompt." };
-      const result = await search(settings.apiKey, prompt);
+      const result = await search(apiKey, prompt);
       return { intent, result } satisfies {
         intent: Intent;
         result: SearchResult;
@@ -102,7 +85,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "agentic_search") {
       const prompt = String(formData.get("prompt") ?? "").trim();
       if (!prompt) return { intent, error: "Enter a research prompt." };
-      const result = await agenticSearch(settings.apiKey, prompt);
+      const result = await agenticSearch(apiKey, prompt);
       return { intent, result } satisfies {
         intent: Intent;
         result: AgenticSearchResult;

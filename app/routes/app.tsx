@@ -19,6 +19,11 @@ export default function App() {
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
         <s-link href="/app">Market research</s-link>
+        <s-link href="/app/site-explorer">Site explorer</s-link>
+        <s-link href="/app/wire">Wire actions</s-link>
+        <s-link href="/app/ai-visibility">AI visibility</s-link>
+        <s-link href="/app/monitors">Monitors</s-link>
+        <s-link href="/app/sessions">Sessions</s-link>
         <s-link href="/app/billing">Billing</s-link>
       </s-app-nav>
       <Outlet />
