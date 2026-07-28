@@ -1,0 +1,64 @@
+# This file stores configurations for your Shopify app.
+#
+# client_id is intentionally blank -- it's assigned by Shopify when this app
+# is registered in a real Partner/Dev Dashboard organization (`shopify app
+# config link` or `shopify app init`'s device-code login flow), neither of
+# which is possible in this sandbox (no browser, no real Partner account --
+# see SUBMIT.md "Not done"). Same gate `tray-cdk deployment create` hit in
+# this session's tray-anakin submission for a different platform.
+client_id = ""
+name = "Anakin Market Research"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+#
+# Empty on purpose: this app never calls the Admin GraphQL/REST API for
+# store data (no products, orders, customers, etc.) -- everything it does
+# is against Anakin's own API using a merchant-supplied Anakin API key, not
+# Shopify data. It still needs a completed OAuth/token-exchange install
+# (every embedded app does, to get a session), it just doesn't need any
+# scoped access once installed.
+scopes = ""
+
+[webhooks]
+api_version = "2025-10"
+
+  # Handled by: /app/routes/webhooks.app.uninstalled.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = ["app/uninstalled"]
+
+  # Handled by: /app/routes/webhooks.app.scopes_update.tsx
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  # Webhooks can have filters
+  # Only receive webhooks for product updates with a product price >= 10.00
+  # See: https://shopify.dev/docs/apps/build/webhooks/customize/filters
+  # [[webhooks.subscriptions]]
+  # topics = ["products/update"]
+  # uri = "/webhooks/products/update"
+  # filter = "variants.price:>=10.00"
+
+  # Mandatory compliance topics for public apps -- required by Shopify's App
+  # Store policy regardless of whether the app processes customer PII (this
+  # one doesn't; see the handlers' own comments for why they're still real,
+  # not no-ops disguised as compliance).
+  # See: https://shopify.dev/docs/apps/build/privacy-law-compliance
+
+  # Handled by: /app/routes/webhooks.customers.data_request.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = ["customers/data_request"]
+
+  # Handled by: /app/routes/webhooks.customers.redact.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = ["customers/redact"]
+
+  # Handled by: /app/routes/webhooks.shop.redact.tsx -- deletes the shop's
+  # saved Anakin API key, the only shop-associated data this app stores.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = ["shop/redact"]

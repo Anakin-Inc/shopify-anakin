@@ -1,0 +1,51 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// One row per shop that has saved an Anakin API key. The key is a
+// merchant-supplied credential to *their own* Anakin account (anakin.io) --
+// it is not related to Shopify's session/access-token model above, and is
+// billed separately by Anakin's own credit system, not by this app's
+// Shopify subscription.
+//
+// NOTE (see SUBMIT.md "Not done"): stored in plaintext in this MVP. A real
+// production deployment should encrypt this column at rest (e.g. via
+// Prisma field-level encryption or an application-level KMS envelope)
+// before going live, the same way you would for any other third-party API
+// credential you store on a customer's behalf.
+model ShopSettings {
+  shop      String   @id
+  apiKey    String
+  updatedAt DateTime @updatedAt
+}
