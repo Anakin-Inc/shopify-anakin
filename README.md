@@ -1,9 +1,10 @@
 # shopify-anakin
 
 An embedded Shopify app that brings [Anakin](https://anakin.io)'s web
-scraping, AI search, and agentic research into the Shopify admin, so a
-merchant can research a competitor's product page or run market research
-without leaving Shopify.
+scraping, site discovery, Wire marketplace actions, AI-visibility checks,
+website monitoring, and AI search into the Shopify admin, so a merchant can
+research a competitor, watch a price page, or check how AI engines describe
+their brand without leaving Shopify.
 
 Scaffolded from Shopify's own current, real template —
 [`Shopify/shopify-app-template-react-router`](https://github.com/Shopify/shopify-app-template-react-router)
@@ -14,15 +15,72 @@ submissions used for their platforms.
 
 ## What's covered
 
-One page, three Anakin operations, matching the same baseline as every
-other single-purpose Anakin integration built this session:
+Six pages, 15 of Anakin's 21 API capabilities — up from the original 3
+(scrape, search, agentic_search). Each new page is its own Remix route
+(`app/routes/app.*.tsx`), gated behind the same Shopify Billing subscription
+via the shared `requireShopContext` helper in `app/anakin-shop.server.ts`,
+and calling into `app/anakin.server.ts`'s hand-rolled Anakin client — see
+"Anakin API surface" below and SUBMIT.md for exactly which endpoint each one
+hits.
 
-- **Scrape a URL** — submits `POST /url-scraper`, then polls
-  `GET /url-scraper/:jobId` until the job completes, and shows the page as
-  markdown.
-- **AI search** — synchronous `POST /search`. No polling, 3 credits.
-- **Agentic research** — submits `POST /agentic-search`, then polls
-  `GET /agentic-search/:jobId`; shows the AI-written summary. 10 credits.
+- **Market research** (`/app`) — the original page:
+  - **Scrape a URL** — submits `POST /url-scraper`, then polls
+    `GET /url-scraper/:jobId` until the job completes, and shows the page as
+    markdown.
+  - **AI search** — synchronous `POST /search`. No polling, 3 credits.
+  - **Agentic research** — submits `POST /agentic-search`, then polls
+    `GET /agentic-search/:jobId`; shows the AI-written summary. 10 credits.
+- **Site explorer** (`/app/site-explorer`) — discover and bulk-fetch a
+  competitor's site:
+  - **Map a site** — `POST /map` → poll `GET /map/:jobId`. Discovers
+    reachable URLs under a starting page.
+  - **Crawl a site** — `POST /crawl` → poll `GET /crawl/:jobId`.
+    Bulk-fetches markdown for up to `maxPages` pages; accepts an optional
+    saved session ID for login-protected sites.
+- **Wire actions** (`/app/wire`) — Anakin's catalog of pre-built per-site
+  automations (Amazon, Walmart, LinkedIn, and hundreds more), read side
+  only:
+  - **Find an action** — `GET /wire/resolve`, natural-language → candidate
+    actions.
+  - **Browse the catalog** — `GET /wire/catalog` or `/wire/catalog/:slug`.
+  - **Run a read action** — `POST /wire/task` → poll `GET /wire/jobs/:id`.
+    Extracts data (price, specs, reviews, listings) without a state change.
+- **AI visibility** (`/app/ai-visibility`) — how AI engines describe your
+  brand:
+  - **Ask AI engines** — `POST /ai-visibility/search` → poll
+    `GET /ai-visibility/search/:searchId`. Compares ChatGPT/Gemini/AI
+    Overview answers to the same question, plus a synthesis of where they
+    agree/diverge.
+  - **List engines** — `GET /ai-visibility/sources`.
+- **Monitors** (`/app/monitors`) — watch a competitor's page on a schedule:
+  - **Create** — `POST /monitors` (min 15-minute interval; full-page or
+    AI-extracted specific-data watch modes).
+  - **List** — `GET /monitors`.
+  - **Changes** — `GET /monitors/:id/changes`.
+  - **Pause / resume / run now / delete** — `POST /monitors/:id/pause` |
+    `/resume` | `/run`, `DELETE /monitors/:id`.
+- **Sessions** (`/app/sessions`) — `GET /sessions`, read-only: lists saved
+  browser sessions whose IDs plug into Site explorer's Crawl form for
+  login-protected pages.
+
+### Deliberately excluded (6 of 21)
+
+- **`wire_write_action`, `wire_login`, `wire_identities`** — Wire's
+  state-changing/auth half. This is a merchant-facing research app; letting
+  it submit forms or sign into third-party accounts on a competitor's site
+  is a different (and much riskier) product than "look things up," and none
+  of the read actions this app exposes need a credential.
+- **`wire_build`** — requests a brand-new scraper be generated for an
+  unlisted site. A power-user/developer operation, not something a
+  merchant researching competitors needs day-to-day.
+- **`session_delete`** — destructive, and sessions can only be *created*
+  from Anakin's own dashboard anyway (see the Sessions page's aside) — this
+  app's session support is read-only by design.
+- **`browser_task`** — free-form AI browser automation. Out of scope for
+  the same reason as the write-side Wire tools: too open-ended for a
+  scoped research/monitoring app, and easy to misuse for exactly the kind
+  of "have an AI click around a website unsupervised" risk a merchant app
+  shouldn't casually expose.
 
 Plus the three things a real Shopify app needs around those operations:
 

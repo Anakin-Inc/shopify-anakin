@@ -16,11 +16,17 @@ boundary matters more here than on any other submission in this batch.
 ```
 app/
   shopify.server.ts              shopifyApp() config: OAuth, billing, webhooks
-  anakin.server.ts               Anakin API client (url-scraper, search, agentic-search)
+  anakin.server.ts               Anakin API client -- 15 operations, see "Anakin API surface" below
+  anakin-shop.server.ts          Shared billing-gate + API-key loader logic, used by every /app/* page
   db.server.ts                   Prisma client singleton (unchanged from template)
   routes/
-    app.tsx                      Embedded app shell (AppProvider, nav)
-    app._index.tsx                Main page: save API key, run all 3 Anakin ops
+    app.tsx                      Embedded app shell (AppProvider, nav -- 6 pages)
+    app._index.tsx                Market research: save API key, scrape/search/agentic_search
+    app.site-explorer.tsx         Map + crawl a competitor's site
+    app.wire.tsx                  Wire: discover/browse/run a read action
+    app.ai-visibility.tsx         AI visibility: ask AI engines, list engines
+    app.monitors.tsx              Website monitors: create/list/changes/pause/resume/run/delete
+    app.sessions.tsx              Saved browser sessions: list (read-only)
     app.billing.tsx               Plan status / cancel
     auth.$.tsx, auth.login/       Real OAuth/login routes (unchanged from template)
     webhooks.app.uninstalled.tsx  (unchanged from template)
@@ -35,6 +41,17 @@ shopify.app.toml                 App config: empty scopes, billing-relevant webh
 .env.example                     Documents required env vars (no CLI-managed .env exists in this sandbox)
 package-lock.json                From a real `npm install` against the npm registry
 ```
+
+**API coverage extended in a later pass of this session**: the original
+build shipped 3 of Anakin's 21 API operations (scrape, search,
+agentic_search) on a single page. This pass added 12 more (map, crawl,
+wire_discover, wire_catalog, wire_read_action, ai_visibility_search,
+ai_visibility_sources, monitor_create, monitor_list, monitor_changes,
+monitor_control, session_list) across 5 new pages -- 15/21 total. See
+"Anakin API surface" and "Not done, and why" below for exactly which 6 were
+left out and why. Everything in this file written before that pass
+describes the original 3-operation build; the sections below it document
+what changed.
 
 Everything not listed above (`app/root.tsx`, `app/entry.server.tsx`,
 `vite.config.ts`, `tsconfig.json`, `Dockerfile`, `.graphqlrc.ts`, etc.) is
@@ -166,21 +183,72 @@ itself while the underlying API usage is billed by the API's own account).
 
 ## Anakin API surface -- read directly from source, not guessed
 
-Ground truth: `/Users/arun/Anakin/anakin-py/src/anakin/client.py` and
-`models.py` (the official Python SDK). `app/anakin.server.ts` is a
-hand-rolled `fetch` client (there's no official Anakin JS/TS SDK to
-depend on) that reimplements exactly the three operations this app's UI
-uses, with the same body shapes, job-id-key tolerance (`jobId` /
-`job_id` / `id`), and terminal-state check (`status` in
-`{completed, failed}`) as the Python SDK's `client.py`:
+**Original 3 operations.** Ground truth:
+`/Users/arun/Anakin/anakin-py/src/anakin/client.py` and `models.py` (the
+official Python SDK). `app/anakin.server.ts` reimplements these with the
+same body shapes, job-id-key tolerance (`jobId` / `job_id` / `id`), and
+terminal-state check (`status` in `{completed, failed}`) as the Python
+SDK's `client.py`:
 
 - `POST /url-scraper` (`{url, country, formats, useBrowser, generateJson,
   forceFresh}`) → poll `GET /url-scraper/:jobId`.
 - `POST /search` (`{prompt, limit}`) -- synchronous, no polling.
 - `POST /agentic-search` (`{prompt, useBrowser, schema?}`) → poll
   `GET /agentic-search/:jobId`.
-- Base URL `https://api.anakin.io/v1`, auth via `X-API-Key` header --
-  matches the task's stated ground truth exactly.
+
+**12 operations added in the coverage-extension pass.** Ground truth:
+Anakin's own MCP server source, `/Users/arun/Anakin/anakin-mcp/src/client.ts`
+(the canonical `AnakinClient`) and `/Users/arun/Anakin/anakin-mcp/src/tools/*.ts`
+(the tool wrappers, whose descriptions this app's UI copy borrows from
+directly rather than re-explaining from scratch) -- read directly, not
+guessed. Where client.ts itself types a response as `unknown` /
+`Record<string, unknown>` (Wire catalog entries, monitor objects), this app
+keeps that same looseness and renders raw JSON instead of inventing field
+names no ground-truth source confirms:
+
+- `POST /map` (`{url, limit, depth, limitPerLevel, includeSubdomains,
+  includeExternalLinks, useBrowser}`) → poll `GET /map/:jobId`.
+- `POST /crawl` (`{url, maxPages, depth, country, useBrowser, sessionId?}`)
+  → poll `GET /crawl/:jobId`.
+- `GET /wire/resolve?q=&limit=` -- synchronous; **confirmed to need no API
+  key at all** (see "Verified, not assumed" below -- a real, unexpected
+  finding from live-testing, not assumed from the ground truth source).
+- `GET /wire/catalog` / `GET /wire/catalog/:slug` -- synchronous, same
+  no-auth-required behavior confirmed live.
+- `POST /wire/task` (`{action_id, params?}`) → poll `GET /wire/jobs/:jobId`,
+  or terminal data returned inline when no `job_id` comes back (sync
+  actions) -- exactly mirrors client.ts's `wireRun`/`pollWireJob`. This
+  endpoint **does** require a valid key (confirmed live, see below) --
+  read-action *execution* is billed, discovery/browsing isn't.
+- `POST /ai-visibility/search` (`{query, sources?, country?}`) → poll
+  `GET /ai-visibility/search/:searchId` until `status !== "running"`
+  (a `failed` status is returned, not thrown -- the payload still carries
+  per-source results/errors, same choice client.ts's
+  `aiVisibilitySearch` makes).
+- `GET /ai-visibility/sources` -- synchronous.
+- `POST /monitors` (`{url, intervalMinutes, scope?, watchMode?, ...}`,
+  min `intervalMinutes` 15) -- synchronous, no polling (monitors are
+  scheduled server-side, not a one-shot job).
+- `GET /monitors`, `GET /monitors/:id/changes` -- synchronous reads.
+- `POST /monitors/:id/pause` / `/resume` / `/run`, `DELETE /monitors/:id`
+  -- synchronous, one call per action.
+- `GET /sessions?domain=` -- synchronous.
+- All under base URL `https://api.anakin.io/v1`, auth via `X-API-Key`
+  header where required -- matches the task's stated ground truth exactly.
+
+**A real bug this pass's live verification caught**: `app/anakin.server.ts`'s
+original error-message extraction (from the 3-operation build) only handled
+the *legacy flat* error envelope (`{error: "msg", code: "CODE"}`, what
+`/search`, `/url-scraper`, etc. return). Anakin's Wire endpoints
+(`/wire/task`) return a *different*, nested envelope --
+`{status: "error", error: {code, message}}` -- which `client.ts`'s own
+`toError` already special-cases (its doc comment literally calls out "Wire's
+nested envelope" vs. "the legacy flat shape"). This app's original parser
+didn't draw that distinction, so a live 401 from `/wire/task` rendered as
+the literal string `AnakinApiError: [object Object]` instead of "Invalid API
+key." -- caught by running `wireReadAction` against the real live API with a
+fake key (see below), not by inspection. Fixed by adding the same
+two-shape distinction client.ts already draws; re-verified live afterward.
 
 ## Verified, not assumed
 
@@ -281,6 +349,70 @@ uses, with the same body shapes, job-id-key tolerance (`jobId` /
   (`anakinFetch` → `AnakinApiError`) runs correctly end to end -- not just
   that the shape looks right on paper.
 
+### Coverage-extension pass (12 new operations, 5 new pages) -- verified the same way
+
+- **`npm install` re-run for real** (node_modules wasn't present at the
+  start of this pass) -- 750 packages resolved from the real npm registry,
+  no changes to `package.json`/`package-lock.json` (same dependency set as
+  the original build; the new pages use only Polaris web components and
+  React/Remix primitives already installed).
+- **`npm run typecheck` passes clean, exit 0** against every new/changed
+  file (`app/anakin.server.ts`, `app/anakin-shop.server.ts`,
+  `app/routes/app._index.tsx`, `app/routes/app.tsx`,
+  `app/routes/app.{site-explorer,wire,ai-visibility,monitors,sessions}.tsx`).
+  Caught two real errors before they shipped: `<s-select defaultValue=...>`
+  isn't a valid prop on that custom element (the real, installed
+  `@shopify/polaris-types` only exposes `defaultSelected` on the child
+  `<s-option>`, not `defaultValue` on `<s-select>` itself -- fixed by moving
+  the default onto the option), and `<s-text tone="subdued">` isn't valid
+  either (`tone` accepts `info`/`warning`/`success`/etc., not `subdued` --
+  that's the `color` prop instead). Both read directly from
+  `node_modules/@shopify/polaris-types/dist/polaris.d.ts` before fixing,
+  not guessed from the original page's usage.
+- **`npm run lint` passes clean, exit 0** -- caught 4 more real
+  `react/no-unescaped-entities` violations (curly quotes/apostrophes in new
+  JSX copy) across 4 files before it passed.
+- **`npm run build` passes clean, exit 0** -- real production build, client
+  bundle (Vite, 337 modules, one new ~2-6 kB chunk per new route) and SSR
+  server bundle (`build/server/index.js`, 108 kB). No server-only-module
+  leak this time (the new pages follow `app.billing.tsx`'s established
+  pattern of not importing `shopify.server.ts` into client code).
+- **Ran every new `anakin.server.ts` function directly against the real,
+  live Anakin API** with an obviously-fake key
+  (`obviously-fake-test-key-not-real`), same technique as the original
+  build's verification:
+  ```
+  mapSite              -> AnakinApiError : Invalid or inactive API key (401)
+  crawlSite             -> AnakinApiError : Invalid or inactive API key (401)
+  wireReadAction        -> AnakinApiError : Invalid API key.             (401)
+  aiVisibilitySources   -> AnakinApiError : Invalid or inactive API key (401)
+  aiVisibilitySearch    -> AnakinApiError : Invalid or inactive API key (401)
+  monitorCreate         -> AnakinApiError : Invalid or inactive API key (401)
+  monitorList           -> AnakinApiError : Invalid or inactive API key (401)
+  monitorChanges        -> AnakinApiError : Invalid or inactive API key (401)
+  monitorControl        -> AnakinApiError : Invalid or inactive API key (401)
+  sessionsList          -> AnakinApiError : Invalid or inactive API key (401)
+  ```
+  **A real, unexpected finding, not assumed going in**: `wireDiscover`
+  (`GET /wire/resolve`) and `wireCatalog` (`GET /wire/catalog`) returned
+  real `200`s with real catalog data even with the fake key -- Wire's
+  discovery/browsing endpoints don't require a valid key, only *running* an
+  action (`POST /wire/task`) does. Confirmed with a direct `curl` too (see
+  below), not just this app's own client, so it's not an artifact of how
+  `anakinFetch` handles a missing-auth response.
+  - Cross-checked several of the above with raw `curl` against the same
+    live endpoints and the same fake key, getting identical bodies, e.g.
+    `GET /monitors` → `401`,
+    `{"error":"unauthorized","message":"Invalid or inactive API key"}`;
+    `POST /map` → the same `401` body; `GET /wire/resolve?q=test&limit=1`
+    → real `200` with real Wire catalog entries (mayocliniclabs,
+    riteaid.com, etc. -- genuine third-party sites in Anakin's live
+    catalog, not fixtures); `POST /wire/task` (fake key) →
+    `401 {"error":{"code":"UNAUTHORIZED","message":"Invalid API key."},"status":"error"}`
+    -- the nested envelope that caught the `[object Object]` bug described
+    under "Anakin API surface" above, and confirmed fixed by re-running
+    `wireReadAction` afterward and seeing the real message come through.
+
 ## Not done, and why
 
 Read this section as the actual completeness boundary, not a hedge.
@@ -353,6 +485,37 @@ Read this section as the actual completeness boundary, not a hedge.
   the real template's own usage exactly and passes `tsc` against the real
   `@shopify/polaris-types`, but has never been visually rendered inside a
   real admin iframe to confirm layout/spacing reads correctly to a human.
+  Applies to the 5 pages added in the coverage-extension pass too.
+- **6 of Anakin's 21 API operations deliberately left out** of the
+  coverage-extension pass, all for scope reasons rather than technical
+  ones -- see README.md's "Deliberately excluded" list for the reasoning
+  per operation (`wire_write_action`, `wire_login`, `wire_identities`,
+  `wire_build`, `session_delete`, `browser_task`). Short version: this app
+  only exposes read-only research/monitoring operations that don't require
+  storing a third-party credential or letting an AI act autonomously on a
+  website on the merchant's behalf -- a materially different risk profile
+  than the read operations it does expose.
+- **Wire catalog, monitor, and session response shapes are rendered as raw
+  JSON in the UI, not curated tables.** This isn't a UI shortcut so much as
+  matching the ground truth's own uncertainty: `anakin-mcp/src/client.ts`
+  itself types `wireCatalog`'s, `monitorCreate`'s, `monitorList`'s, and
+  `sessionsList`'s return values as `unknown` / `Record<string, unknown>`
+  rather than a concrete interface. Inventing field names to build a nicer
+  table would be guessing at a shape no source available in this sandbox
+  confirms -- the raw-JSON rendering is the honest choice, at the cost of a
+  less polished-looking page for those three operations specifically.
+  (`wire_discover`'s and `ai_visibility_search`'s responses *are* rendered
+  as tables -- their field names are documented directly in the MCP tool
+  descriptions, e.g. `action_id`/`type` for Wire results, `source`/
+  `status`/`summary` for AI visibility results, so those aren't guesses.)
+- **Monitor create/list/changes/control and AI-visibility search were only
+  verified against a 401 (invalid key), not a real 200 success path** --
+  same limitation as the original 3 operations had (no real Anakin account
+  credit balance available in this sandbox). The 401 checks confirm
+  endpoint paths, request shapes, and the `X-API-Key` header are correct
+  against the live API; they don't confirm the exact shape of a
+  *successful* monitor/search response, since this app deliberately
+  doesn't assume one it can't verify (see the raw-JSON point above).
 
 ## Steps (needs the account owner)
 
